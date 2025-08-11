@@ -57,11 +57,16 @@ def preview_changes(remote_files, local_files, local_base_path):
         local_path = os.path.join(
             local_base_path, os.path.relpath(remote_path, REMOTE_DIR)
         )
+        # Calculate to GB
+        remote_size = remote_size / (1024 * 1024 * 1024)
         if local_path not in local_files:
-            to_download.append(["Copy", remote_path, local_path])
+            to_download.append(
+                ["Copy", remote_path, local_path, f"{round(remote_size, 2)} GB"]
+            )
         elif local_files[local_path] != remote_size:
-            to_download.append(["Updated", remote_path, local_path])
-
+            to_download.append(
+                ["Updated", remote_path, local_path, f"{round(remote_size, 2)} GB"]
+            )
     # Identify files to delete
     for local_path, _ in local_files.items():
         remote_path = os.path.join(
@@ -121,27 +126,26 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
         sys.stdout.flush()
 
     # Download or update files
-    for action, remote_path, local_path in to_download:
+    for action, remote_path, local_path, total_size in to_download:
         print(f"{action.upper()}: {remote_path} -----> {local_path}")
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
         try:
-            # Get the file size for progress calculation
-            ftp_client.voidcmd("TYPE I")
-            total_size = ftp_client.size(remote_path)
+            filename = os.path.basename(remote_path)
             if total_size is None:
                 # Handle cases where size can't be determined
                 logging.warning(
                     f"Could not get size for {remote_path}. Downloading without progress display."
                 )
                 with open(local_path, "wb") as local_file:
-                    ftp_client.retrbinary(f"RETR {remote_path}", local_file.write)
+                    ftp_client.retrbinary(f"RETR {filename}", local_file.write)
                 continue
+
             files_processed += 1
             bytes_so_far = 0
             with open(local_path, "wb") as local_file:
                 # Use retrbinary with the custom callback for progress
-                ftp_client.retrbinary(f"RETR {remote_path}", handle_binary)
+                ftp_client.retrbinary(f"RETR {filename}", handle_binary)
 
             sys.stdout.write("\n")  # Newline after a completed download progress line
         except ftplib.all_errors as e:
@@ -170,8 +174,8 @@ if __name__ == "__main__":
                 '"FTP_PORT": 21,\n'
                 '"FTP_USER": "anonymous",\n'
                 ' "FTP_PASSWORD": "anonymous",\n'
-                ' "REMOTE_DIR": "\\\\MXF",\n'
-                ' "LOCAL_DIR": "D:\\\\",\n'
+                ' "REMOTE_DIR": "MXF",\n'
+                ' "LOCAL_DIR": "D:\\\\TestFolder",\n'
                 ' "PREVIEW_MODE": true,\n'
                 ' "INTERVAL_TIME": 120\n'
                 "}"
