@@ -169,7 +169,7 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
 
 
 if __name__ == "__main__":
-    # os.system("mode CON: COLS=200 LINES=40")
+    os.system("mode CON: COLS=200 LINES=40")
 
     if not os.path.exists("config.json"):
         # Create a template config file
