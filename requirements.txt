@@ -1,0 +1,4 @@
+tabulate
+pyftpdlib
+pyinstaller
+Pillow
