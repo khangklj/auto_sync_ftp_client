@@ -61,12 +61,13 @@ def preview_changes(remote_files, local_files, local_base_path):
         remote_size = remote_size / (1024 * 1024 * 1024)
         if local_path not in local_files:
             to_download.append(
-                ["Copy", remote_path, local_path, f"{round(remote_size, 2)} GB"]
+                ["Copy", remote_path, local_path, f"{remote_size:.2f} GB"]
             )
         elif local_files[local_path] != remote_size:
             to_download.append(
-                ["Updated", remote_path, local_path, f"{round(remote_size, 2)} GB"]
+                ["Updated", remote_path, local_path, f"{remote_size:.2f} GB"]
             )
+
     # Identify files to delete
     for local_path, _ in local_files.items():
         remote_path = os.path.join(
@@ -126,12 +127,14 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
         sys.stdout.flush()
 
     # Download or update files
-    for action, remote_path, local_path, total_size in to_download:
+    for action, remote_path, local_path, _ in to_download:
         print(f"{action.upper()}: {remote_path} -----> {local_path}")
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
         try:
             filename = os.path.basename(remote_path)
+            ftp.voidcmd("TYPE I")
+            total_size = ftp.size(filename)
             if total_size is None:
                 # Handle cases where size can't be determined
                 logging.warning(
