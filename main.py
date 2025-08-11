@@ -21,24 +21,14 @@ def get_remote_file_list(ftp_client: ftplib.FTP, remote_path):
         sys.exit(1)
 
     items = ftp_client.nlst()
-
-    for item in items:
-        # Check if it's a directory
-        try:
-            ftp_client.cwd(item)
-            # It's a directory, recurse
-            remote_files.update(
-                get_remote_file_list(
-                    ftp_client, os.path.normpath(os.path.join(remote_path, item))
-                )
-            )
-            ftp_client.cwd("..")
-        except ftplib.error_perm:
-            # It's a file
+    try:
+        for item in items:
             file_path = os.path.normpath(os.path.join(remote_path, item))
             ftp_client.voidcmd("TYPE I")
             file_size = ftp_client.size(item)
             remote_files[file_path] = file_size
+    except ftplib.error_perm:
+        print(f"File {item} is a directory or being changed. Skipping...")
 
     return remote_files
 
@@ -169,7 +159,7 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
 
 
 if __name__ == "__main__":
-    os.system("mode CON: COLS=200 LINES=40")
+    os.system("mode CON: COLS=200")
 
     if not os.path.exists("config.json"):
         # Create a template config file
