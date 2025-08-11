@@ -176,7 +176,8 @@ if __name__ == "__main__":
         with open("config.json", "w") as f:
             f.write(
                 "{\n"
-                '"FTP_HOST": "127.0.0.1",\n '
+                '"FTP_HOST": "127.0.0.1",\n'
+                '"FTP_PORT": 21,\n'
                 '"FTP_USER": "anonymous",\n'
                 ' "FTP_PASSWORD": "anonymous",\n'
                 ' "REMOTE_DIR": "\\\\MXF",\n'
@@ -193,6 +194,7 @@ if __name__ == "__main__":
         config = json.load(f)
 
     FTP_HOST = config["FTP_HOST"]
+    FTP_PORT = config["FTP_PORT"]
     FTP_USER = config["FTP_USER"]
     FTP_PASSWORD = config["FTP_PASSWORD"]
     REMOTE_DIR = os.path.normpath(config["REMOTE_DIR"])
@@ -200,7 +202,7 @@ if __name__ == "__main__":
     PREVIEW_MODE = config["PREVIEW_MODE"]
     INTERVAL_TIME = config["INTERVAL_TIME"]
 
-    print(f"Connecting to FTP host {FTP_HOST}")
+    print(f"Connecting to FTP {FTP_HOST}:{FTP_PORT}")
     print(f"Watch remote folder {REMOTE_DIR}")
     print(f"Interval time: {INTERVAL_TIME} seconds")
     if PREVIEW_MODE:
@@ -210,7 +212,8 @@ if __name__ == "__main__":
         while True:
             ftp = None
             try:
-                ftp = ftplib.FTP(FTP_HOST)
+                ftp = ftplib.FTP()
+                ftp.connect(FTP_HOST, FTP_PORT)
                 ftp.login(FTP_USER, FTP_PASSWORD)
                 if PREVIEW_MODE:
                     print("Logged in to FTP server successfully.")
