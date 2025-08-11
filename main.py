@@ -82,7 +82,7 @@ def preview_changes(remote_files, local_files, local_base_path):
 
     if len(to_download) > 0 or len(to_delete) > 0:
         # Print current time
-        print("\n")
+        print("\n===============================")
         logging.info("Detect changes")
 
     # Print the download/update table
