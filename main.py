@@ -5,181 +5,178 @@ import tabulate
 import sys
 import json
 import time
+import sqlite3
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
-def get_remote_file_list(ftp_client: ftplib.FTP, remote_path):
-    """Recursively gets all file paths and sizes from the remote FTP directory."""
-    remote_files = {}
-    downloaded_files = []
+# Enum class
+# 0 = Not downloaded (in remote not in local or incompleted file in local),
+# 1 = Downloaded (in local and remote),
+# 2 = Deleted (in local but not in remote)
+class VideoStatus:
+    NOT_DOWNLOADED = 0
+    DOWNLOADED = 1
+    DELETED = 2
+
+
+class VideoModel:
+    def __init__(self, video_id, video_status):
+        self.video_id = video_id
+        self.video_status = video_status
+
+    def __repr__(self):
+        return f"VideoModel(video_id={self.video_id}, video_status={self.video_status})"
+
+    def __str__(self):
+        return f"VideoModel(video_id={self.video_id}, video_status={self.video_status})"
+
+
+def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
     try:
-        ftp_client.cwd(remote_path)
-    except ftplib.error_perm as e:
-        logging.error(f"Could not access remote path {remote_path}: {e}")
+        ftp_client.cwd(remote_dir)
+        remote_files = ftp_client.nlst()
+
+        for remote_file in remote_files:
+            remote_dir = os.path.normpath(os.path.join(remote_dir, remote_file))
+            cur.execute("SELECT * FROM videos WHERE video_id = ?", (remote_file,))
+            row: sqlite3.Row = cur.fetchone()
+            if row is None:
+                cur.execute(
+                    "INSERT INTO videos (video_id, video_status) VALUES (?, ?)",
+                    (remote_file, VideoStatus.NOT_DOWNLOADED),
+                )
+        conn.commit()
+
+        cur.execute(
+            "SELECT * FROM videos WHERE video_status = ?", (VideoStatus.DOWNLOADED,)
+        )
+        rows: list[sqlite3.Row] = cur.fetchall()
+        for row in rows:
+            if row["video_id"] not in remote_files:
+                cur.execute(
+                    "UPDATE videos SET video_status = ? WHERE video_id = ?",
+                    (VideoStatus.DELETED, row["video_id"]),
+                )
+        conn.commit()
+    except Exception as e:
+        logging.error(f"Error scanning remote directory {remote_dir}: {e}")
         sys.exit(1)
 
-    if not os.path.exists("downloaded_file.txt"):
-        with open("downloaded_file.txt", "w") as f:
-            f.write("")
-    with open("downloaded_file.txt", "r") as downloaded_file:
-        downloaded_files = downloaded_file.read().splitlines()
 
-    items = ftp_client.nlst()
-    try:
-        for item in items:
-            if item in downloaded_files:
-                continue
-            file_path = os.path.normpath(os.path.join(remote_path, item))
-            ftp_client.voidcmd("TYPE I")
-            file_size = ftp_client.size(item)
-            remote_files[file_path] = file_size
-    except ftplib.error_perm:
-        print(f"File {item} is a directory or being changed. Skipping...")
-
-    return remote_files
-
-
-def get_local_file_list(local_path):
+def get_local_files():
     """Recursively gets all local file paths and sizes."""
-    local_files = {}
-    if not os.path.exists(local_path):
+    local_files = []
+    if not os.path.exists(LOCAL_DIR):
         return local_files
 
-    for root, _, files in os.walk(local_path):
+    for root, _, files in os.walk(LOCAL_DIR):
         for file in files:
             file_path = os.path.normpath(os.path.join(root, file))
-            local_files[file_path] = os.path.getsize(file_path)
+            local_files.append(file_path)
 
     return local_files
 
 
-def preview_changes(remote_files, local_files, local_base_path):
+def preview_changes():
     """Compares file lists and prints the planned changes in a table."""
-    to_download = []
-    to_delete = []
+    table = []
+    download_count = 0
+    delete_count = 0
 
-    # Identify files to download or update
-    for remote_path, remote_size in sorted(remote_files.items()):
-        local_path = os.path.join(
-            local_base_path, os.path.relpath(remote_path, REMOTE_DIR)
-        )
-        # Calculate to GB
-        remote_size = remote_size / (1024 * 1024 * 1024)
-        if local_path not in local_files:
-            to_download.append(
-                ["Copy", remote_path, local_path, f"{remote_size:.2f} GB"]
-            )
-        elif local_files[local_path] != remote_size:
-            to_download.append(
-                ["Updated", remote_path, local_path, f"{remote_size:.2f} GB"]
-            )
+    rows: list[sqlite3.Row] = cur.execute("SELECT * FROM videos").fetchall()
+    for row in rows:
+        video_id = row["video_id"]
+        video_status = row["video_status"]
+        if video_status == VideoStatus.NOT_DOWNLOADED:
+            table.append(["Download (local)", video_id])
+            download_count += 1
+        elif video_status == VideoStatus.DELETED:
+            table.append(["Delete (local)", video_id])
+            delete_count += 1
 
-    # Identify files to delete
-    for local_path, _ in local_files.items():
-        remote_path = os.path.join(
-            REMOTE_DIR, os.path.relpath(local_path, local_base_path)
-        )
-        if remote_path not in remote_files:
-            to_delete.append([local_path])
+    if download_count == 0 and delete_count == 0:
+        if PREVIEW_MODE:
+            print("No changes detected")
+        return
 
-    if len(to_download) > 0 or len(to_delete) > 0:
-        # Print current time
-        print("\n===============================")
-        logging.info("Detect changes")
-
-    # Print the download/update table
-    if to_download:
-        headers_download = ["Action", "Remote Path", "Local Path"]
-        print("Files to be downloaded/updated:")
-        print(
-            tabulate.tabulate(
-                to_download, headers=headers_download, tablefmt="fancy_grid"
-            )
-        )
-    else:
-        print("\nNo new or updated files to download.") if PREVIEW_MODE else None
-
-    # Print the deletion table
-    if to_delete:
-        headers_delete = ["Local Path"]
-        print("\nFiles to be deleted:")
-        print(
-            tabulate.tabulate(to_delete, headers=headers_delete, tablefmt="fancy_grid")
-        )
-    else:
-        print("\nNo files to be deleted.") if PREVIEW_MODE else None
-    print("===============================") if PREVIEW_MODE else None
-
-    return to_download, to_delete
+    # Print the table
+    headers = ["Action", "Video ID"]
+    print("Preview of changes:")
+    print(tabulate.tabulate(table, headers=headers, tablefmt="fancy_grid"))
+    print(f"Total {download_count} files to download.")
+    print(f"Total {delete_count} files to delete.")
+    print("===============================")
 
 
-def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
-    """
-    Mirrors the remote directory to the local one, showing progress during downloads.
-    """
-
-    total_files = len(to_download)
-    files_processed = 0   
-
-    # Helper function to track download progress
-    def handle_binary(block):
-        nonlocal bytes_so_far
-        local_file.write(block)
-        bytes_so_far += len(block)
-        percent = (bytes_so_far / total_size) * 100
-        sys.stdout.write(
-            f"\r[{files_processed}/{total_files}] {remote_path}: {percent:.2f}% complete"
-        )
-        sys.stdout.flush()
-    
+def mirror_ftp_directory(ftp_client: ftplib.FTP):
+    cur.execute(
+        "SELECT * FROM videos WHERE video_status = ? or video_status = ?",
+        (VideoStatus.NOT_DOWNLOADED, VideoStatus.DELETED),
+    )
+    rows: list[sqlite3.Row] = cur.fetchall()
+    total_files = len(rows)
+    count = 1
     # Delete files in local
-    for local_path_list in to_delete:
-        local_path = local_path_list[0]
-        try:
-            os.remove(local_path)
-            print(f"DELETE: {local_path}")
-        except OSError as e:
-            logging.error(f"Error deleting file {local_path}: {e}")
+    for row in rows:
+        if row["video_status"] == VideoStatus.DELETED:
+            local_path = os.path.join(LOCAL_DIR, row["video_id"])
+            try:
+                os.remove(local_path)
+                print(f"[{count}/{total_files}] DELETE: {local_path}")
+                cur.execute("DELETE FROM videos WHERE video_id = ?", (row["video_id"],))
+                conn.commit()
+                count += 1
+            except OSError as e:
+                logging.error(f"Error deleting file {local_path}: {e}")
 
     # Download or update files
-    for action, remote_path, local_path, _ in to_download:
-        print(f"{action.upper()}: {remote_path} -----> {local_path}")
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-
-        try:
-            filename = os.path.basename(remote_path)
-            ftp.voidcmd("TYPE I")
-            total_size = ftp.size(filename)
-            if total_size is None:
-                # Handle cases where size can't be determined
-                logging.warning(
-                    f"Could not get size for {remote_path}. Downloading without progress display."
+    for row in rows:
+        if row["video_status"] == VideoStatus.NOT_DOWNLOADED:
+            remote_path = os.path.join(REMOTE_DIR, row["video_id"])
+            local_path = os.path.join(LOCAL_DIR, row["video_id"])
+            try:
+                ftp_client.retrbinary(
+                    f"RETR {remote_path}", open(local_path, "wb").write
                 )
-                with open(local_path, "wb") as local_file:
-                    ftp_client.retrbinary(f"RETR {filename}", local_file.write)
-                continue
-
-            files_processed += 1
-            bytes_so_far = 0
-            with open(local_path, "wb") as local_file:
-                # Use retrbinary with the custom callback for progress
-                ftp_client.retrbinary(f"RETR {filename}", handle_binary)
-
-            sys.stdout.write("\n")  # Newline after a completed download progress line
-
-            # Write to a local file to store which file is downloaded
-            with open("downloaded_file.txt", "a") as f:
-                f.write(f"{remote_path}\n")
-        except ftplib.all_errors as e:
-            logging.error(f"Failed to download {remote_path}: {e}")
-            # Consider cleaning up the partially downloaded file here
+                cur.execute(
+                    "UPDATE videos SET video_status = ? WHERE video_id = ?",
+                    (VideoStatus.DOWNLOADED, row["video_id"]),
+                )
+                conn.commit()
+                print(
+                    f"[{count}/{total_files}] DOWNLOAD: {remote_path} -----> {local_path}"
+                )
+                count += 1
+            except ftplib.all_errors as e:
+                logging.error(f"Error downloading file {remote_path}: {e}")
 
 
 if __name__ == "__main__":
     os.system("mode CON: COLS=200")
+
+    # Prepare database
+    conn = None
+    try:
+        if not os.path.exists("database"):
+            os.mkdir("database")
+        conn = sqlite3.connect("database/qlps.db")
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        create_table = """
+            CREATE TABLE IF NOT EXISTS videos (
+                video_id STRING PRIMARY KEY,
+                video_status INTEGER                
+            );
+        """
+        cur.execute(create_table)
+        conn.commit()
+
+    except Exception as e:
+        logging.error(f"Failed during setup database: {e}")
+        sys.exit(1)
 
     if not os.path.exists("config.json"):
         # Create a template config file
@@ -229,19 +226,15 @@ if __name__ == "__main__":
                     print("Logged in to FTP server successfully.")
                 ftp.set_pasv(True)
 
-                remote_files = get_remote_file_list(ftp, REMOTE_DIR)
-                local_files = get_local_file_list(LOCAL_DIR)
-
-                to_download, to_delete = preview_changes(
-                    remote_files, local_files, LOCAL_DIR
-                )
+                scan_remote(ftp, REMOTE_DIR)
+                preview_changes()
 
                 if PREVIEW_MODE:
                     action = input("Do you want to commit?[Y/n] ")
                     if action.lower() != "y":
                         sys.exit(0)
 
-                mirror_ftp_directory(ftp, to_download, to_delete)
+                mirror_ftp_directory(ftp)
                 if PREVIEW_MODE:
                     break
             except ftplib.all_errors as e:

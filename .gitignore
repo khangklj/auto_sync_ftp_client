@@ -204,3 +204,4 @@ __marimo__/
 ftp_server.py
 config.json
 downloaded_file.txt
+database/*
