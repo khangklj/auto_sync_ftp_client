@@ -113,7 +113,7 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
     """
 
     total_files = len(to_download)
-    files_processed = 0
+    files_processed = 0   
 
     # Helper function to track download progress
     def handle_binary(block):
@@ -125,6 +125,15 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
             f"\r[{files_processed}/{total_files}] {remote_path}: {percent:.2f}% complete"
         )
         sys.stdout.flush()
+    
+    # Delete files in local
+    for local_path_list in to_delete:
+        local_path = local_path_list[0]
+        try:
+            os.remove(local_path)
+            print(f"DELETE: {local_path}")
+        except OSError as e:
+            logging.error(f"Error deleting file {local_path}: {e}")
 
     # Download or update files
     for action, remote_path, local_path, _ in to_download:
@@ -154,15 +163,6 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
         except ftplib.all_errors as e:
             logging.error(f"Failed to download {remote_path}: {e}")
             # Consider cleaning up the partially downloaded file here
-
-    # Delete files in local
-    for local_path_list in to_delete:
-        local_path = local_path_list[0]
-        try:
-            os.remove(local_path)
-            print(f"DELETE: {local_path}")
-        except OSError as e:
-            logging.error(f"Error deleting file {local_path}: {e}")
 
 
 if __name__ == "__main__":
