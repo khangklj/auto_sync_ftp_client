@@ -14,15 +14,24 @@ logging.basicConfig(
 def get_remote_file_list(ftp_client: ftplib.FTP, remote_path):
     """Recursively gets all file paths and sizes from the remote FTP directory."""
     remote_files = {}
+    downloaded_files = []
     try:
         ftp_client.cwd(remote_path)
     except ftplib.error_perm as e:
         logging.error(f"Could not access remote path {remote_path}: {e}")
         sys.exit(1)
 
+    if not os.path.exists("downloaded_file.txt"):
+        with open("downloaded_file.txt", "w") as f:
+            f.write("")
+    with open("downloaded_file.txt", "r") as downloaded_file:
+        downloaded_files = downloaded_file.read().splitlines()
+
     items = ftp_client.nlst()
     try:
         for item in items:
+            if item in downloaded_files:
+                continue
             file_path = os.path.normpath(os.path.join(remote_path, item))
             ftp_client.voidcmd("TYPE I")
             file_size = ftp_client.size(item)
@@ -53,7 +62,7 @@ def preview_changes(remote_files, local_files, local_base_path):
     to_delete = []
 
     # Identify files to download or update
-    for remote_path, remote_size in remote_files.items():
+    for remote_path, remote_size in sorted(remote_files.items()):
         local_path = os.path.join(
             local_base_path, os.path.relpath(remote_path, REMOTE_DIR)
         )
@@ -160,6 +169,10 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP, to_download, to_delete):
                 ftp_client.retrbinary(f"RETR {filename}", handle_binary)
 
             sys.stdout.write("\n")  # Newline after a completed download progress line
+
+            # Write to a local file to store which file is downloaded
+            with open("downloaded_file.txt", "a") as f:
+                f.write(f"{remote_path}\n")
         except ftplib.all_errors as e:
             logging.error(f"Failed to download {remote_path}: {e}")
             # Consider cleaning up the partially downloaded file here
