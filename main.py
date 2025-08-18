@@ -25,7 +25,6 @@ class VideoStatus:
 
 def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
     try:
-        ftp_client.cwd(remote_dir)
         remote_files = ftp_client.nlst()
 
         for remote_file in remote_files:
@@ -62,7 +61,31 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
         sys.exit(1)
 
 
-def get_local_files():
+def scan_local():
+    try:
+        local_paths = get_local_paths()
+        cur.execute(
+            "SELECT * FROM videos WHERE video_status = ?",
+            (VideoStatus.DOWNLOADED,),
+        )
+        rows: list[sqlite3.Row] = cur.fetchall()
+        local_file_ids = []
+        for local_path in local_paths:
+            local_file_id = os.path.basename(local_path)
+            local_file_ids.append(local_file_id)
+
+        for row in rows:
+            if row["video_id"] not in local_file_ids:
+                cur.execute(
+                    "UPDATE videos SET video_status = ? WHERE video_id = ?",
+                    (VideoStatus.NOT_DOWNLOADED, row["video_id"]),
+                )
+    except Exception as e:
+        logging.error(f"Error scanning local directory: {e}")
+        sys.exit(1)
+
+
+def get_local_paths():
     """Recursively gets all local file paths and sizes."""
     local_files = []
     if not os.path.exists(LOCAL_DIR):
@@ -83,7 +106,9 @@ def preview_changes():
     delete_count = 0
     update_count = 0
 
-    rows: list[sqlite3.Row] = cur.execute("SELECT * FROM videos").fetchall()
+    rows: list[sqlite3.Row] = cur.execute(
+        "SELECT * FROM videos ORDER BY video_id ASC"
+    ).fetchall()
     for row in rows:
         video_id = row["video_id"]
         video_status = row["video_status"]
@@ -114,7 +139,7 @@ def preview_changes():
 
 def mirror_ftp_directory(ftp_client: ftplib.FTP):
     cur.execute(
-        "SELECT * FROM videos WHERE video_status = ? or video_status = ? or video_status = ?",
+        "SELECT * FROM videos WHERE video_status = ? or video_status = ? or video_status = ? ORDER BY video_id ASC",
         (VideoStatus.NOT_DOWNLOADED, VideoStatus.DELETED, VideoStatus.UPDATED),
     )
     rows: list[sqlite3.Row] = cur.fetchall()
@@ -133,6 +158,15 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP):
             except OSError as e:
                 logging.error(f"Error deleting file {local_path}: {e}")
 
+    def callback(block):
+        # Print total bytes downloaded
+        nonlocal total_bytes
+        total_bytes += len(block)
+        sys.stdout.write(
+            f"\r[{count}/{total_files}] {"DOWNLOAD" if row['video_status'] == VideoStatus.NOT_DOWNLOADED else "UPDATE"}: {remote_path} -----> {local_path} ---- {total_bytes / 1024 / 1024 / 1024:.2f} GB"
+        )
+        sys.stdout.flush()
+
     # Download or update files
     for row in rows:
         if (
@@ -142,17 +176,19 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP):
             remote_path = os.path.join(REMOTE_DIR, row["video_id"])
             local_path = os.path.join(LOCAL_DIR, row["video_id"])
             try:
-                ftp_client.retrbinary(
-                    f"RETR {remote_path}", open(local_path, "wb").write
-                )
+                total_bytes = 0
+                with open(local_path, "wb") as local_file:
+                    ftp_client.retrbinary(
+                        f"RETR {row["video_id"]}",
+                        callback=callback,
+                    )
                 cur.execute(
                     "UPDATE videos SET video_status = ? WHERE video_id = ?",
                     (VideoStatus.DOWNLOADED, row["video_id"]),
                 )
                 conn.commit()
-                print(
-                    f"[{count}/{total_files}] {"DOWNLOAD" if row['video_status'] == VideoStatus.NOT_DOWNLOADED else "UPDATE"}: {remote_path} -----> {local_path}"
-                )
+                sys.stdout.write(" DONE")
+                sys.stdout.write("\n")
                 count += 1
             except ftplib.all_errors as e:
                 logging.error(f"Error downloading file {remote_path}: {e}")
@@ -188,9 +224,9 @@ if __name__ == "__main__":
         with open("config.json", "w") as f:
             f.write(
                 "{\n"
-                '"FTP_HOST": "127.0.0.1",\n'
-                '"FTP_PORT": 21,\n'
-                '"FTP_USER": "anonymous",\n'
+                ' "FTP_HOST": "127.0.0.1",\n'
+                ' "FTP_PORT": 21,\n'
+                ' "FTP_USER": "anonymous",\n'
                 ' "FTP_PASSWORD": "anonymous",\n'
                 ' "REMOTE_DIR": "MXF",\n'
                 ' "LOCAL_DIR": "D:\\\\TestFolder",\n'
@@ -227,11 +263,13 @@ if __name__ == "__main__":
                 ftp = ftplib.FTP()
                 ftp.connect(FTP_HOST, FTP_PORT)
                 ftp.login(FTP_USER, FTP_PASSWORD)
+                ftp.cwd(REMOTE_DIR)
                 if PREVIEW_MODE:
                     print("Logged in to FTP server successfully.")
                 ftp.set_pasv(True)
 
                 scan_remote(ftp, REMOTE_DIR)
+                scan_local()
                 preview_changes()
 
                 if PREVIEW_MODE:
@@ -250,6 +288,7 @@ if __name__ == "__main__":
                     ftp.quit()
                     if PREVIEW_MODE:
                         print("Disconnected from FTP server.")
+                conn.close()
             time.sleep(INTERVAL_TIME)
     except KeyboardInterrupt:
         print("Program interrupted by user. Exiting...")
