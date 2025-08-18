@@ -19,19 +19,8 @@ logging.basicConfig(
 class VideoStatus:
     NOT_DOWNLOADED = 0
     DOWNLOADED = 1
-    DELETED = 2
-
-
-class VideoModel:
-    def __init__(self, video_id, video_status):
-        self.video_id = video_id
-        self.video_status = video_status
-
-    def __repr__(self):
-        return f"VideoModel(video_id={self.video_id}, video_status={self.video_status})"
-
-    def __str__(self):
-        return f"VideoModel(video_id={self.video_id}, video_status={self.video_status})"
+    UPDATED = 2
+    DELETED = 3
 
 
 def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
@@ -40,13 +29,20 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
         remote_files = ftp_client.nlst()
 
         for remote_file in remote_files:
+            ftp_client.voidcmd("TYPE I")
+            remote_file_size = ftp_client.size(remote_file)
             remote_dir = os.path.normpath(os.path.join(remote_dir, remote_file))
             cur.execute("SELECT * FROM videos WHERE video_id = ?", (remote_file,))
             row: sqlite3.Row = cur.fetchone()
             if row is None:
                 cur.execute(
-                    "INSERT INTO videos (video_id, video_status) VALUES (?, ?)",
-                    (remote_file, VideoStatus.NOT_DOWNLOADED),
+                    "INSERT INTO videos (video_id, video_status, video_remote_size) VALUES (?, ?, ?)",
+                    (remote_file, VideoStatus.NOT_DOWNLOADED, remote_file_size),
+                )
+            elif remote_file_size != row["video_remote_size"]:
+                cur.execute(
+                    "UPDATE videos SET video_status = ?, video_remote_size = ? WHERE video_id = ?",
+                    (VideoStatus.UPDATED, remote_file_size, remote_file),
                 )
         conn.commit()
 
@@ -85,19 +81,23 @@ def preview_changes():
     table = []
     download_count = 0
     delete_count = 0
+    update_count = 0
 
     rows: list[sqlite3.Row] = cur.execute("SELECT * FROM videos").fetchall()
     for row in rows:
         video_id = row["video_id"]
         video_status = row["video_status"]
         if video_status == VideoStatus.NOT_DOWNLOADED:
-            table.append(["Download (local)", video_id])
+            table.append(["Download", video_id])
             download_count += 1
         elif video_status == VideoStatus.DELETED:
-            table.append(["Delete (local)", video_id])
+            table.append(["Delete", video_id])
             delete_count += 1
+        elif video_status == VideoStatus.UPDATED:
+            table.append(["Update", video_id])
+            update_count += 1
 
-    if download_count == 0 and delete_count == 0:
+    if download_count == 0 and delete_count == 0 and update_count == 0:
         if PREVIEW_MODE:
             print("No changes detected")
         return
@@ -107,14 +107,15 @@ def preview_changes():
     print("Preview of changes:")
     print(tabulate.tabulate(table, headers=headers, tablefmt="fancy_grid"))
     print(f"Total {download_count} files to download.")
+    print(f"Total {update_count} files to update.")
     print(f"Total {delete_count} files to delete.")
     print("===============================")
 
 
 def mirror_ftp_directory(ftp_client: ftplib.FTP):
     cur.execute(
-        "SELECT * FROM videos WHERE video_status = ? or video_status = ?",
-        (VideoStatus.NOT_DOWNLOADED, VideoStatus.DELETED),
+        "SELECT * FROM videos WHERE video_status = ? or video_status = ? or video_status = ?",
+        (VideoStatus.NOT_DOWNLOADED, VideoStatus.DELETED, VideoStatus.UPDATED),
     )
     rows: list[sqlite3.Row] = cur.fetchall()
     total_files = len(rows)
@@ -134,7 +135,10 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP):
 
     # Download or update files
     for row in rows:
-        if row["video_status"] == VideoStatus.NOT_DOWNLOADED:
+        if (
+            row["video_status"] == VideoStatus.NOT_DOWNLOADED
+            or row["video_status"] == VideoStatus.UPDATED
+        ):
             remote_path = os.path.join(REMOTE_DIR, row["video_id"])
             local_path = os.path.join(LOCAL_DIR, row["video_id"])
             try:
@@ -147,7 +151,7 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP):
                 )
                 conn.commit()
                 print(
-                    f"[{count}/{total_files}] DOWNLOAD: {remote_path} -----> {local_path}"
+                    f"[{count}/{total_files}] {"DOWNLOAD" if row['video_status'] == VideoStatus.NOT_DOWNLOADED else "UPDATE"}: {remote_path} -----> {local_path}"
                 )
                 count += 1
             except ftplib.all_errors as e:
@@ -168,7 +172,8 @@ if __name__ == "__main__":
         create_table = """
             CREATE TABLE IF NOT EXISTS videos (
                 video_id STRING PRIMARY KEY,
-                video_status INTEGER                
+                video_status INTEGER,
+                video_remote_size INTEGER                
             );
         """
         cur.execute(create_table)
