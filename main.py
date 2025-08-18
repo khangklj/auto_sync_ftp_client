@@ -162,6 +162,7 @@ def mirror_ftp_directory(ftp_client: ftplib.FTP):
         # Print total bytes downloaded
         nonlocal total_bytes
         total_bytes += len(block)
+        local_file.write(block)
         sys.stdout.write(
             f"\r[{count}/{total_files}] {"DOWNLOAD" if row['video_status'] == VideoStatus.NOT_DOWNLOADED else "UPDATE"}: {remote_path} -----> {local_path} ---- {total_bytes / 1024 / 1024 / 1024:.2f} GB"
         )
