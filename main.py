@@ -30,7 +30,6 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
         for remote_file in remote_files:
             ftp_client.voidcmd("TYPE I")
             remote_file_size = ftp_client.size(remote_file)
-            remote_dir = os.path.normpath(os.path.join(remote_dir, remote_file))
             cur.execute("SELECT * FROM videos WHERE video_id = ?", (remote_file,))
             row: sqlite3.Row = cur.fetchone()
             if row is None:
