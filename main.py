@@ -27,6 +27,19 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
     try:
         remote_files = ftp_client.nlst()
 
+        cur.execute(
+            "SELECT * FROM videos WHERE video_status = ? or video_status = ? or video_status = ?",
+            (VideoStatus.DOWNLOADED, VideoStatus.NOT_DOWNLOADED, VideoStatus.UPDATED),
+        )
+        rows: list[sqlite3.Row] = cur.fetchall()
+        for row in rows:
+            if row["video_id"] not in remote_files:
+                cur.execute(
+                    "UPDATE videos SET video_status = ? WHERE video_id = ?",
+                    (VideoStatus.DELETED, row["video_id"]),
+                )
+        conn.commit()
+
         for remote_file in remote_files:
             try:
                 ftp_client.voidcmd("TYPE I")
@@ -45,18 +58,6 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
                 cur.execute(
                     "UPDATE videos SET video_status = ?, video_remote_size = ? WHERE video_id = ?",
                     (VideoStatus.UPDATED, remote_file_size, remote_file),
-                )
-        conn.commit()
-
-        cur.execute(
-            "SELECT * FROM videos WHERE video_status = ?", (VideoStatus.DOWNLOADED,)
-        )
-        rows: list[sqlite3.Row] = cur.fetchall()
-        for row in rows:
-            if row["video_id"] not in remote_files:
-                cur.execute(
-                    "UPDATE videos SET video_status = ? WHERE video_id = ?",
-                    (VideoStatus.DELETED, row["video_id"]),
                 )
         conn.commit()
     except Exception as e:
