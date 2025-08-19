@@ -72,10 +72,6 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
                     )
 
         conn.commit()
-        for row in rows:
-            print(
-                f"{row['video_id']} - {row['video_status']} - {row['video_remote_size']}"
-            )
 
         for remote_file in remote_files:
             try:
