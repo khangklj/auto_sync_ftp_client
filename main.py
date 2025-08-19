@@ -26,10 +26,10 @@ class VideoStatus:
 def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
     try:
         remote_files = ftp_client.nlst()
+        local_files = get_local_files()
 
         cur.execute(
-            "SELECT * FROM videos WHERE video_status = ?",
-            (VideoStatus.DOWNLOADED,),
+            "SELECT * FROM videos ORDER BY video_id ASC",
         )
         rows: list[sqlite3.Row] = cur.fetchall()
         for row in rows:
@@ -42,12 +42,40 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
                         "UPDATE videos SET video_status = ? WHERE video_id = ?",
                         (VideoStatus.DELETED, row["video_id"]),
                     )
-                elif row["video_status"] == VideoStatus.NOT_DOWNLOADED:
+                elif (row["video_status"] == VideoStatus.NOT_DOWNLOADED) or (
+                    row["video_status"] == VideoStatus.DELETED
+                    and row["video_id"] not in local_files
+                ):
+                    cur.execute(
+                        "DELETE FROM videos where video_id = ?", (row["video_id"],)
+                    )
+                elif (row["video_status"] == VideoStatus.DELETED) and (
+                    row["video_id"] in local_files
+                ):
+                    cur.execute(
+                        "UPDATE videos SET video_status = ? WHERE video_id = ?",
+                        (VideoStatus.UPDATED, row["video_id"]),
+                    )
+            elif row["video_id"] in local_files:  # and in remote
+                if (
+                    row["video_status"] == VideoStatus.DELETED
+                    or row["video_status"] == VideoStatus.NOT_DOWNLOADED
+                ):
+                    cur.execute(
+                        "UPDATE videos SET video_status = ? WHERE video_id = ?",
+                        (VideoStatus.UPDATED, row["video_id"]),
+                    )
+            elif row["video_id"] not in local_files:  # and in remote
+                if row["video_status"] == VideoStatus.DELETED:
                     cur.execute(
                         "DELETE FROM videos where video_id = ?", (row["video_id"],)
                     )
 
         conn.commit()
+        for row in rows:
+            print(
+                f"{row['video_id']} - {row['video_status']} - {row['video_remote_size']}"
+            )
 
         for remote_file in remote_files:
             try:
@@ -76,40 +104,41 @@ def scan_remote(ftp_client: ftplib.FTP, remote_dir: str):
 
 def scan_local():
     try:
-        local_paths = get_local_paths()
+        local_files = get_local_files()
         cur.execute(
             "SELECT * FROM videos WHERE video_status = ?",
             (VideoStatus.DOWNLOADED,),
         )
         rows: list[sqlite3.Row] = cur.fetchall()
-        local_file_ids = []
-        for local_path in local_paths:
-            local_file_id = os.path.basename(local_path)
-            local_file_ids.append(local_file_id)
 
         for row in rows:
-            if row["video_id"] not in local_file_ids:
+            if row["video_id"] not in local_files:
                 cur.execute(
                     "UPDATE videos SET video_status = ? WHERE video_id = ?",
                     (VideoStatus.NOT_DOWNLOADED, row["video_id"]),
                 )
+        conn.commit()
+
     except Exception as e:
         logging.error(f"Error scanning local directory: {e}")
         sys.exit(1)
 
 
-def get_local_paths():
+def get_local_files():
     """Recursively gets all local file paths and sizes."""
-    local_files = []
+    local_file_paths = []
     if not os.path.exists(LOCAL_DIR):
-        return local_files
+        return []
 
     for root, _, files in os.walk(LOCAL_DIR):
         for file in files:
             file_path = os.path.normpath(os.path.join(root, file))
-            local_files.append(file_path)
-
-    return local_files
+            local_file_paths.append(file_path)
+    local_file_ids = []
+    for local_path in local_file_paths:
+        local_file_id = os.path.basename(local_path)
+        local_file_ids.append(local_file_id)
+    return local_file_ids
 
 
 def preview_changes():
